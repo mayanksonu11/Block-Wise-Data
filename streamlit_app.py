@@ -46,17 +46,26 @@ if uploaded_file is not None:
     exact_counts_df['Block'] = muzaffarpur_df['Block'].values
 
     exact_block_counts = exact_counts_df.groupby('Block', as_index=False)[ks].sum()
-    exact_block_counts = exact_block_counts.set_index('Block').reindex(block_stats['Block']).fillna(0).astype(int).reset_index()
+    # Sort by Block name before adding grand total
+    exact_block_counts = exact_block_counts.sort_values(by='Block')
+    # Add Grand Total row
+    grand_total = exact_block_counts[ks].sum()
+    grand_total_row = pd.DataFrame(
+        [['Grand Total'] + grand_total.tolist()],
+        columns=['Block'] + [str(k) for k in ks]
+    )
+    # Convert column names to string for consistency
+    exact_block_counts.columns = ['Block'] + [str(k) for k in ks]
+    # Append grand total row
+    exact_sheet_with_total = pd.concat([exact_block_counts, grand_total_row], ignore_index=True)
 
     # --- Create Excel (multi-sheet) into BytesIO for download ---
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
         # 1. Block_Stats sheet
         block_stats.to_excel(writer, sheet_name='Block_Stats', index=False)
-        # 2. Exact_1_to_50 sheet (sorted by Block name)
-        exact_sheet = exact_block_counts.rename(columns={k: str(k) for k in ks})
-        exact_sheet_sorted = exact_sheet.sort_values(by='Block')
-        exact_sheet_sorted.to_excel(writer, sheet_name='Exact_1_to_50', index=False)
+        # 2. Exact_1_to_50 sheet (sorted by Block name, with Grand Total)
+        exact_sheet_with_total.to_excel(writer, sheet_name='Exact_1_to_50', index=False)
         # 3. Individual block sheets
         for block in muzaffarpur_df['Block'].unique():
             block_df = muzaffarpur_df[muzaffarpur_df['Block'] == block].sort_values(by='Saplings', ascending=False)
