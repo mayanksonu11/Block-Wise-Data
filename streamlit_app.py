@@ -17,7 +17,7 @@ if uploaded_file is not None:
 
     # --- Data Processing ---
     muzaffarpur_df = df[df['District'] == 'MUZAFFARPUR'].copy()
-    muzaffarpur_df['Block'] = muzaffarpur_df['Block'].fillna(method='ffill')
+    muzaffarpur_df['Block'] = muzaffarpur_df['Block'].ffill()  # Updated to use .ffill()
 
     block_stats = muzaffarpur_df.groupby('Block').agg(
         Number_of_Schools=('School', 'count'),
@@ -38,31 +38,48 @@ if uploaded_file is not None:
     block_stats['Rank'] = block_stats['PERCENTAGE'].rank(ascending=False, method='dense').astype(int)
     block_stats = block_stats.sort_values(by='Rank')
 
+
+    # --- Build Block-wise counts for exact saplings 1..50 ---
+    ks = list(range(1, 51))
+    indicators = {k: (muzaffarpur_df['Saplings'] == k).astype(int) for k in ks}
+    exact_counts_df = pd.DataFrame(indicators)
+    exact_counts_df['Block'] = muzaffarpur_df['Block'].values
+
+    exact_block_counts = exact_counts_df.groupby('Block', as_index=False)[ks].sum()
+    exact_block_counts = exact_block_counts.set_index('Block').reindex(block_stats['Block']).fillna(0).astype(int).reset_index()
+
     # --- Create Excel (multi-sheet) into BytesIO for download ---
     excel_buffer = io.BytesIO()
     with pd.ExcelWriter(excel_buffer, engine='xlsxwriter') as writer:
+        # 1. Block_Stats sheet
         block_stats.to_excel(writer, sheet_name='Block_Stats', index=False)
+        # 2. Exact_1_to_50 sheet (sorted by Block name)
+        exact_sheet = exact_block_counts.rename(columns={k: str(k) for k in ks})
+        exact_sheet_sorted = exact_sheet.sort_values(by='Block')
+        exact_sheet_sorted.to_excel(writer, sheet_name='Exact_1_to_50', index=False)
+        # 3. Individual block sheets
         for block in muzaffarpur_df['Block'].unique():
             block_df = muzaffarpur_df[muzaffarpur_df['Block'] == block].sort_values(by='Saplings', ascending=False)
             block_df.to_excel(writer, sheet_name=str(block), index=False)
-    excel_buffer.seek(0)  # rewind to start for download[6][11]
+    excel_buffer.seek(0)
 
     st.success("Processing complete!")
 
-    # --- Two download buttons: CSV and Excel ---
+    st.markdown("**This file contains block-wise current status of Total Saplings**")
     st.download_button(
         label="Download Blockwise Data",
         data=csv_bytes,
         file_name="muzaffarpur_block_stats.csv",
         mime="text/csv"
-    )  # Provide CSV correctly as bytes[2][1]
+    )
 
+    st.markdown("**This file contains Rank data, sapling counts (1-50) per block, and detailed data for each block.**")
     st.download_button(
-        label="Download Rank Data",
-        data=excel_buffer,
+        label="Download Detailed Report",
+        data=excel_buffer.getvalue(),
         file_name="muzaffarpur_blockwise_data.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )  # Multi-sheet Excel from BytesIO[6][11]
+    )
 
     st.write("Block Statistics:")
     st.dataframe(block_stats)
