@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+import requests
 from reportlab.lib.pagesizes import landscape, A4
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib import colors
@@ -29,6 +30,61 @@ if uploaded_file is not None:
         Total_Saplings=('Saplings', 'sum')
     ).reset_index()
 
+    # --- Fetch previous data from Google Sheets ---
+    def get_previous_data():
+        url = "https://script.google.com/macros/s/AKfycbxQ1jTTUzv3ch47YAA0ZwnK6iKOBlk1PDQ3mUF9nGNA-KJUTFYmGBRPmsFNLSdLMq_6xQ/exec"  # Replace with actual Apps Script URL
+        try:
+            response = requests.get(url)
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('status') == 'success' and 'data' in data:
+                    prev_df = pd.DataFrame(data['data'])
+                    if not prev_df.empty:
+                        # Convert Timestamp to datetime if needed
+                        prev_df['Timestamp'] = pd.to_datetime(prev_df['Timestamp'])
+                        # Group by Block and take the latest entry
+                        prev_df = prev_df.sort_values('Timestamp').groupby('Block').last().reset_index()
+                        # Select and rename columns
+                        prev_df = prev_df[['Block', 'Number_of_Schools', 'Total_Saplings', 'Timestamp']].rename(columns={
+                            'Number_of_Schools': 'Previous_Number_of_Schools',
+                            'Total_Saplings': 'Previous_Total_Saplings'
+                        })
+                        return prev_df
+            return pd.DataFrame()  # Empty if no data or error
+        except Exception as e:
+            st.warning(f"Could not fetch previous data: {str(e)}")
+            return pd.DataFrame()
+
+    # Get previous data
+    prev_data = get_previous_data()
+
+    # Get previous data date
+    previous_data_date = None
+    if not prev_data.empty:
+        latest_timestamp = pd.to_datetime(prev_data['Timestamp']).max()
+        previous_data_date = latest_timestamp.strftime("%d.%m.%Y")
+
+    # Merge previous data with current block_stats
+    if not prev_data.empty:
+        block_stats = block_stats.merge(prev_data, on='Block', how='left')
+        block_stats['Previous_Number_of_Schools'] = block_stats['Previous_Number_of_Schools'].fillna(0).astype(int)
+        block_stats['Previous_Total_Saplings'] = block_stats['Previous_Total_Saplings'].fillna(0).astype(int)
+        # Drop Timestamp column as it's not needed in final data
+        block_stats = block_stats.drop(columns=['Timestamp'], errors='ignore')
+    else:
+        block_stats['Previous_Number_of_Schools'] = 0
+        block_stats['Previous_Total_Saplings'] = 0
+
+    # Calculate progression data
+    block_stats['Increase_Number_of_Schools'] = block_stats['Number_of_Schools'] - block_stats['Previous_Number_of_Schools']
+    block_stats['Increase_Total_Saplings'] = block_stats['Total_Saplings'] - block_stats['Previous_Total_Saplings']
+
+    # Reorder columns: Prev schools, Prev saplings, Current schools, Current saplings, Increase schools, Increase saplings
+    block_stats = block_stats[['Block', 'Previous_Number_of_Schools', 'Previous_Total_Saplings', 'Number_of_Schools', 'Total_Saplings', 'Increase_Number_of_Schools', 'Increase_Total_Saplings'] + [col for col in block_stats.columns if col not in ['Block', 'Previous_Number_of_Schools', 'Previous_Total_Saplings', 'Number_of_Schools', 'Total_Saplings', 'Increase_Number_of_Schools', 'Increase_Total_Saplings']]]
+
+    # Add Sl No. column
+    block_stats.insert(0, 'Sl No.', range(1, len(block_stats) + 1))
+
     # --- Prepare CSV bytes for download ---
     csv_bytes = block_stats.to_csv(index=False).encode('utf-8')  # CSV button uses bytes[2][1]
 
@@ -42,7 +98,6 @@ if uploaded_file is not None:
     )
     block_stats['Rank'] = block_stats['Percentage'].rank(ascending=False, method='dense').astype(int)
     block_stats = block_stats.sort_values(by='Rank')
-
 
     # --- Build Block-wise counts for exact saplings 1..50 ---
     ks = list(range(1, 51))
@@ -160,7 +215,10 @@ if uploaded_file is not None:
 
     st.success("Processing complete!")
 
-    st.markdown("**This file contains block-wise current status of Total Saplings**")
+    if previous_data_date:
+        st.write(f"**Previous data as of: {previous_data_date}**")
+
+    st.markdown("**This file contains block-wise current status and progression of Total Saplings**")
     st.download_button(
         label="Download Blockwise Data",
         data=csv_bytes,
@@ -184,5 +242,27 @@ if uploaded_file is not None:
         mime="application/pdf"
     )
 
-    st.write("Block Statistics:")
-    st.dataframe(block_stats)
+    # st.write("Block Statistics:")
+    # st.dataframe(block_stats)
+
+    # Function to send data to persistent storage
+    def send_data_to_storage(data):
+        url = "https://script.google.com/macros/s/AKfycbxQ1jTTUzv3ch47YAA0ZwnK6iKOBlk1PDQ3mUF9nGNA-KJUTFYmGBRPmsFNLSdLMq_6xQ/exec"  # Replace with actual API endpoint
+        headers = {'Content-Type': 'application/json'}
+        try:
+            response = requests.post(url, json=data, headers=headers)
+            if response.status_code == 200:
+                st.success("Data stored successfully!")
+            else:
+                st.error(f"Failed to store data: {response.status_code}")
+        except Exception as e:
+            st.error(f"Error sending data: {str(e)}")
+
+    st.markdown("**Use this button to update today's data in database.**")
+    # Button to store data persistently
+    if st.button("Store Data"):
+        # Prepare data: blockwise stats with schools and saplings
+        data_to_send = {
+            "blockwise_data": block_stats[['Block', 'Number_of_Schools', 'Total_Saplings']].to_dict(orient='records')
+        }
+        send_data_to_storage(data_to_send)
