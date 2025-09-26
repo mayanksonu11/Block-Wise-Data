@@ -40,8 +40,8 @@ if uploaded_file is not None:
                 if data.get('status') == 'success' and 'data' in data:
                     prev_df = pd.DataFrame(data['data'])
                     if not prev_df.empty:
-                        # Convert Timestamp to datetime if needed
-                        prev_df['Timestamp'] = pd.to_datetime(prev_df['Timestamp'])
+                        # Convert Timestamp to datetime, localizing to GMT+5:30 (IST)
+                        prev_df['Timestamp'] = pd.to_datetime(prev_df['Timestamp']).dt.tz_convert('Asia/Kolkata')
                         # Group by Block and take the latest entry
                         prev_df = prev_df.sort_values('Timestamp').groupby('Block').last().reset_index()
                         # Select and rename columns
